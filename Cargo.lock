@@ -435,20 +435,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sketchbook"
-version = "0.1.0"
-dependencies = [
- "async-compression",
- "bytes",
- "futures",
- "pin-project",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "slab"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -511,6 +497,20 @@ dependencies = [
  "socket2",
  "tokio-macros",
  "windows-sys",
+]
+
+[[package]]
+name = "tokio-flush-after-shutdown"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "futures",
+ "pin-project",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -3,23 +3,75 @@ use bytes::Bytes;
 use futures::{stream, Sink, StreamExt as _};
 use pin_project::{pin_project, pinned_drop};
 use std::io;
+use std::task::ready;
 use std::{
     fmt::Debug,
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::io::AsyncWrite;
+use tokio::{fs::File, io::AsyncWrite};
 use tokio_util::codec::{BytesCodec, Encoder, FramedWrite};
 
 async fn _main() {
-    let file = TracingFile::create("/dev/null").await.unwrap();
+    let file = File::create("/dev/null").await.unwrap();
     // the bug goes away in this case:
     // let file = TracingAsyncWriteSink::new();
-    let zstd_encoder = TracingZstdEncoder::new(file);
+    let zstd_encoder = ZstdEncoder::new(file);
     stream::empty::<io::Result<Bytes>>()
         .forward(FramedWrite::new(zstd_encoder, BytesCodec::new()))
         .await
         .unwrap();
+}
+
+#[pin_project]
+#[derive(Debug)]
+struct ExplodeOnFlushAfterShutdown<T> {
+    has_been_shutdown: bool,
+    #[pin]
+    inner: T,
+}
+
+impl<T> ExplodeOnFlushAfterShutdown<T>
+where
+    T: AsyncWrite,
+{
+    fn new(inner: T) -> Self {
+        Self {
+            has_been_shutdown: false,
+            inner,
+        }
+    }
+}
+
+impl<T> AsyncWrite for ExplodeOnFlushAfterShutdown<T>
+where
+    T: AsyncWrite + Debug,
+{
+    #[tracing::instrument]
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.project().inner.poll_write(cx, buf)
+    }
+
+    #[tracing::instrument]
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        assert!(!self.has_been_shutdown);
+        self.project().inner.poll_flush(cx)
+    }
+
+    #[tracing::instrument]
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        assert!(!self.has_been_shutdown);
+        let this = self.as_mut().project();
+        let res = ready!(this.inner.poll_shutdown(cx)).map(|it| {
+            *this.has_been_shutdown = true;
+            it
+        });
+        Poll::Ready(res)
+    }
 }
 
 #[derive(Debug)]
@@ -146,12 +198,12 @@ where
 #[derive(Debug)]
 struct TracingFile {
     #[pin]
-    inner: tokio::fs::File,
+    inner: File,
 }
 
 impl TracingFile {
     async fn create(path: &str) -> io::Result<Self> {
-        let inner = tokio::fs::File::create(path).await?;
+        let inner = File::create(path).await?;
         Ok(Self { inner })
     }
 }
@@ -192,7 +244,6 @@ async fn main() {
         util::SubscriberInitExt as _,
     };
     let _guard = tracing_subscriber::fmt()
-        // .pretty()
         .with_span_events(FmtSpan::FULL)
         .with_test_writer()
         .with_max_level(LevelFilter::TRACE)
